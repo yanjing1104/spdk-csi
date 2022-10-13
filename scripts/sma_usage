@@ -1,0 +1,40 @@
+[root@ubuntu2204 ~]# echo '{"method": "CreateDevice", "params": {"nvmf_tcp": {"subnqn": "nqn.2016-06.io.spdk:cnode0", "adrfam": "ipv4", "traddr": "127.0.0.1", "trsvcid": "4420"}}}' | ./spdk/scripts/sma-client.py --address 127.0.0.1 --port 5114 | jq -r '.handle'
+nvmf-tcp:nqn.2016-06.io.spdk:cnode0
+
+[root@ubuntu2204 ~]# ./spdk/scripts/rpc.py bdev_get_bdevs -b null0 | jq -r '.[].uuid'
+379e77f9-1198-4536-9110-11fcd63222c1
+
+
+[root@ubuntu2204 ~]# source spdk/test/sma/common.sh
+
+[root@ubuntu2204 ~]# uuid2base64 379e77f9-1198-4536-9110-11fcd63222c1
+N553+RGYRTaREBH81jIiwQ==
+
+[root@ubuntu2204 ~]# echo '{"method": "AttachVolume", "params": {"device_handle": "nvmf-tcp:nqn.2016-06.io.spdk:cnode0", "volume": {"volume_id": "N553+RGYRTaREBH81jIiwQ=="}}}' | ./spdk/scripts/sma-client.py --address 127.0.0.1 --port 5114
+{}
+
+[root@ubuntu2204 ~]# ./spdk/scripts/rpc.py nvmf_get_subsystems nqn.2016-06.io.spdk:cnode0 | jq -r '.[0].namespaces[0].uuid'
+379e77f9-1198-4536-9110-11fcd63222c1
+
+[root@ubuntu2204 ~]# echo '{"method": "DetachVolume", "params": {"device_handle": "nvmf-tcp:nqn.2016-06.io.spdk:cnode0", "volume_id": "N553+RGYRTaREBH81jIiwQ=="}}' | ./spdk/scripts/sma-client.py --address 127.0.0.1 --port 5114
+{}
+
+[root@ubuntu2204 ~]# ./spdk/scripts/rpc.py nvmf_get_subsystems nqn.2016-06.io.spdk:cnode0 | jq -r '.[0].namespaces[0].uuid'
+null
+
+[root@ubuntu2204 ~]# echo '{"method": "DeleteDevice", "params": {"handle": "nvmf-tcp:nqn.2016-06.io.spdk:cnode0"}}' | ./spdk/scripts/sma-client.py --address 127.0.0.1 --port 5114
+{}
+
+[root@ubuntu2204 ~]# ./spdk/scripts/rpc.py nvmf_get_subsystems nqn.2016-06.io.spdk:cnode0 
+request:
+{
+  "nqn": "nqn.2016-06.io.spdk:cnode0",
+  "method": "nvmf_get_subsystems",
+  "req_id": 1
+}
+Got JSON-RPC error response
+response:
+{
+  "code": -19,
+  "message": "No such device"
+}

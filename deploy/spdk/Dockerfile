@@ -14,3 +14,4 @@ RUN cd spdk && \
     ./configure --disable-tests --without-vhost --without-virtio \
                 --with-rdma --target-arch=${ARCH} && \
     make
+COPY sma.yaml .
