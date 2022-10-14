@@ -2,19 +2,6 @@
 # Copyright (c) Arm Limited and Contributors
 # Copyright (c) Intel Corporation
 ---
-kind: PersistentVolumeClaim
-apiVersion: v1
-metadata:
-  name: spdkcsi-pvc
-spec:
-  accessModes:
-  - ReadWriteOnce
-  resources:
-    requests:
-      storage: 256Mi
-  storageClassName: spdkcsi-sc
-
----
 kind: Pod
 apiVersion: v1
 metadata:

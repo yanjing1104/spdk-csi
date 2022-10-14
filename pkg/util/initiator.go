@@ -18,6 +18,7 @@ package util
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -26,10 +27,13 @@ import (
 	"strings"
 	"time"
 
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
+	"github.com/google/uuid"
 	"k8s.io/klog"
 
 	// grpc stuff
-	"google.golang.org/grpc"
+
 	smarpc "spdk.io/sma"
 	"spdk.io/sma/nvmf_tcp"
 
@@ -50,7 +54,8 @@ type SpdkCsiInitiator interface {
 func NewSpdkCsiInitiator(volumeContext map[string]string) (SpdkCsiInitiator, error) {
 	targetType := strings.ToLower(volumeContext["targetType"])
 	if smaConfigString, ok := volumeContext["sma"]; ok {
-		isma := initiatorSMA{}
+		klog.Infof("SMA in volumeContext, use legacy connection to %v", volumeContext["model"])
+		isma := initiatorSMA{volumeContext: volumeContext}
 		smaConfig := spdkcsiConfig.SmaConfig{}
 		err := json.Unmarshal([]byte(smaConfigString), &smaConfig)
 		if err != nil {
@@ -62,17 +67,17 @@ func NewSpdkCsiInitiator(volumeContext map[string]string) (SpdkCsiInitiator, err
 			isma.req = &smarpc.CreateDeviceRequest{
 				Volume: nil,
 				Params: &smarpc.CreateDeviceRequest_NvmfTcp{
-					&nvmf_tcp.DeviceParameters{
+					NvmfTcp: &nvmf_tcp.DeviceParameters{
 						Subnqn:  volumeContext["nqn"],
-						Adrfam:  "ipv4", // TODO
+						Adrfam:  "ipv4",
 						Traddr:  volumeContext["targetAddr"],
-						Trsvcid: volumeContext["targetPort"],
+						Trsvcid: "4420",
 					},
 				},
 			}
 		default:
 			klog.Errorf("Unsupported SMA target type in %v", volumeContext)
-			return nil, fmt.Errorf("Unknown SMA target type: %q", volumeContext["targetType"])
+			return nil, fmt.Errorf("unknown SMA target type: %q", volumeContext["targetType"])
 		}
 		return &isma, nil
 	}
@@ -234,26 +239,96 @@ func execWithTimeout(cmdLine []string, timeout int) error {
 
 // SMA initiator implementation
 type initiatorSMA struct {
-	serverURL string
-	req       *smarpc.CreateDeviceRequest
+	serverURL     string
+	req           *smarpc.CreateDeviceRequest
+	volumeContext map[string]string
 }
 
 func (sma *initiatorSMA) Connect() (string, error) {
 	var conn *grpc.ClientConn
-	conn, err := grpc.Dial(sma.serverURL, grpc.WithInsecure())
+	conn, err := grpc.Dial(sma.serverURL, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		klog.Errorf("failed to connect to SMA grpc server in: %s, %s", sma.serverURL, err)
+	}
+	client := smarpc.NewStorageManagementAgentClient(conn)
+
+	ctxTimeout, cancel := context.WithTimeout(context.Background(), 42*time.Second)
+	defer cancel()
+
+	// Create device
+	response, err := client.CreateDevice(ctxTimeout, sma.req)
+	if err != nil {
+		klog.Errorf("Creating device failed: %s", err)
+	}
+	klog.Infof("DELME: initiator Connect: CreateDevice response: %+v", response)
+	klog.Infof("DELME: volumeID: %s", sma.volumeContext["model"])
+	
+	volUuid := uuid.MustParse(sma.volumeContext["model"])
+	volUuidBytes, err := volUuid.MarshalBinary()
+	volUuidB64 := base64.StdEncoding.EncodeToString(volUuidBytes)
+	klog.Infof("DELME: volumeID to base64: %s", volUuidB64)
+	
+	deviceHandle := response.Handle
+	attachReq := &smarpc.AttachVolumeRequest{
+		Volume:       &smarpc.VolumeParameters{VolumeId: []byte(volUuidB64)},
+		DeviceHandle: deviceHandle,
+	}
+
+	// Attach volume
+	attachRes, err := client.AttachVolume(ctxTimeout, attachReq)
+	if err != nil {
+		klog.Errorf("Attaching volume failed: %s", err)
+	}
+	klog.Infof(attachRes.String())
+
+	// Detach volumn
+	// echo '{"method": "DetachVolume", "params": {"device_handle": "nvmf-tcp:nqn.2016-06.io.spdk:cnode0", "volume_id": "N553+RGYRTaREBH81jIiwQ=="}}' | ./spdk/scripts/sma-client.py --address 127.0.0.1 --port 5114
+	// detachRes, err := client.DetachVolume()
+	// if err !=
+	/*
+		deviceHandle := response.Handle
+		volumnID := sma.req.GetNvmfTcp().Subnqn[29:]
+
+
+		klog.Infof("DELME: deviceHandle %+v", deviceHandle)
+		klog.Infof("DELME: Sunnqn %+v", sma.req.GetNvmfTcp().Subnqn)
+		klog.Infof("DELME: volumnID %+v", volumnID)
+
+		attachReq := smarpc.AttachVolumeRequest{
+			Volume:       &smarpc.VolumeParameters{VolumeId: []byte(volumnID)},
+			DeviceHandle: deviceHandle,
+		}
+		// Attach device
+		response, err = client.AttachVolume(ctxTimeout, *attachReq)
+		if err != nil {
+			klog.Errorf("initiatorSMA.Connect(): not implemented")
+		}
+		klog.Infof(response.GetHandle())
+	*/
+	return "", fmt.Errorf("initiatorSMA.Connect(): not implemented error")
+}
+
+/*
+func (sma *initiatorSMA) Connect() (string, error) {
+	var conn *grpc.ClientConn
+	conn, err := grpc.Dial(sma.serverURL, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		return "", fmt.Errorf("failed to connect to SMA grpc server in %q: %w", sma.serverURL, err)
 	}
 	client := smarpc.NewStorageManagementAgentClient(conn)
-	ctxTimeout, _ := context.WithTimeout(context.Background(), 42*time.Second)
+	ctxTimeout, cancel := context.WithTimeout(context.Background(), 42*time.Second)
+	defer cancel()
 	response, err := client.CreateDevice(ctxTimeout, sma.req)
+	if err != nil {
+		klog.Errorf("initiatorSMA.Connect(): not implemented")
+	}
 	klog.Infof("DELME: initiator Connect: CreateDevice response: %+v", response)
 
-	klog.Errorf("initiatorSMA.Connect(): not implemented")
 	// TODO: send CreateDevice to SMA
 	// TODO: wait for /dev/... to appear.
 	return "", fmt.Errorf("initiatorSMA.Connect(): not implemented error")
 }
+*/
 
 func (sma *initiatorSMA) Disconnect() error {
 	klog.Errorf("initiatorSMA.Disconnect(): not implemented")
