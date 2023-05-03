@@ -147,6 +147,8 @@ func (iscsi *initiatorISCSI) Disconnect() error {
 }
 
 // wait for device file comes up or timeout
+//
+//nolint:unparam //  "seconds" always receives "20", skip this linter checking
 func waitForDeviceReady(deviceGlob string, seconds int) (string, error) {
 	for i := 0; i <= seconds; i++ {
 		time.Sleep(time.Second)

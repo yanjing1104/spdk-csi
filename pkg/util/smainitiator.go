@@ -19,12 +19,14 @@ package util
 import (
 	"context"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/google/uuid"
 	smarpc "github.com/spdk/sma-goapi/v1alpha1"
 	"github.com/spdk/sma-goapi/v1alpha1/nvmf"
 	"github.com/spdk/sma-goapi/v1alpha1/nvmf_tcp"
+	"github.com/spdk/sma-goapi/v1alpha1/virtio_blk"
 	"k8s.io/klog"
 )
 
@@ -36,7 +38,7 @@ const (
 	smaNvmfTCPSubNqnPref = "nqn.2022-04.io.spdk.csi:cnode0:uuid:"
 )
 
-func NewSpdkCsiSmaInitiator(volumeContext map[string]string, smaClient smarpc.StorageManagementAgentClient, smaTargetType string) (SpdkCsiInitiator, error) {
+func NewSpdkCsiSmaInitiator(volumeContext map[string]string, smaClient smarpc.StorageManagementAgentClient, smaTargetType string, kvmPciBridges int) (SpdkCsiInitiator, error) {
 	iSmaCommon := &smaCommon{
 		smaClient:     smaClient,
 		volumeContext: volumeContext,
@@ -45,6 +47,11 @@ func NewSpdkCsiSmaInitiator(volumeContext map[string]string, smaClient smarpc.St
 	switch smaTargetType {
 	case "xpu-sma-nvmftcp":
 		return &smainitiatorNvmfTCP{sma: iSmaCommon}, nil
+	case "xpu-sma-virtioblk":
+		return &smainitiatorVirtioBlk{
+			sma:           iSmaCommon,
+			kvmPciBridges: kvmPciBridges,
+		}, nil
 	default:
 		return nil, fmt.Errorf("unknown SMA targetType: %s", smaTargetType)
 	}
@@ -64,6 +71,12 @@ type smaCommon struct {
 
 type smainitiatorNvmfTCP struct {
 	sma *smaCommon
+}
+
+type smainitiatorVirtioBlk struct {
+	sma           *smaCommon
+	devicePath    string
+	kvmPciBridges int
 }
 
 func (sma *smaCommon) ctxTimeout() (context.Context, context.CancelFunc) {
@@ -297,4 +310,112 @@ func (i *smainitiatorNvmfTCP) Disconnect() error {
 		return err
 	}
 	return nil
+}
+
+func (i *smainitiatorVirtioBlk) smainitiatorVirtioBlkCleanup() {
+	if err := i.sma.DeleteDevice(i.sma.smaClient, &smarpc.DeleteDeviceRequest{Handle: i.sma.deviceHandle}); err != nil {
+		klog.Errorf("SMA.VirtioBlk calling DeleteDevice to clean up error: %s", err)
+	}
+}
+
+// For SMA VirtioBlk Connect(), only CreateDevice is needed, which contains the Volume and PhysicalId/VirtualId info in the request.
+// As we are using KVM case now, in  "deploy/spdk/sma.yaml", the name, buses and count of pci-bridge are configured for vhost_blk when starting sma server.
+// The sma server will talk with qemu VM, which configured with "-device pci-bridge,chassis_nr=1,id=pci.spdk.0, -device pci-bridge,chassis_nr=2,id=pci.spdk.1".
+// Generally, when using KVM, the VirtualId is always 0, and the range of PhysicalId is from 0 to the sum of buses-counts (namely 64 in our case).
+// Once CreateDevice succeeds, a VirtioBlk block device will appear.
+//
+//nolint:cyclop // currently, calculated cyclomatic complexity 11 (>10)
+func (i *smainitiatorVirtioBlk) Connect() (string, error) {
+	if err := i.sma.volumeUUID(); err != nil {
+		return "", err
+	}
+
+	// CreateDevice for VirtioBlk
+	// FIXME (JingYan): The err might not be caused by CreateDevice with non-available PhysicalId, thus,
+	// this might not be a very reliable way to obtain the free PhysicalIds. Later, we might need to introduce a more reliable way to find the free PhysicalIds.
+	// eg, browsering the filesystem to find the available pci buses.
+	createDeviceFlag := false
+	bdf := ""
+	for pciBridge := 1; pciBridge <= i.kvmPciBridges; pciBridge++ {
+		for busCount := 0; busCount < 32; busCount++ {
+			physID := uint32(busCount + 32*(pciBridge-1))
+			createReq := &smarpc.CreateDeviceRequest{
+				Volume: &smarpc.VolumeParameters{
+					VolumeId:         i.sma.volumeID,
+					ConnectionParams: i.sma.nvmfVolumeParameters(),
+				},
+				Params: &smarpc.CreateDeviceRequest_VirtioBlk{
+					VirtioBlk: &virtio_blk.DeviceParameters{
+						PhysicalId: physID,
+						VirtualId:  0,
+					},
+				},
+			}
+			err := i.sma.CreateDevice(i.sma.smaClient, createReq)
+			if err != nil {
+				klog.Errorf("CreateDevice for SMA VirtioBlk with PhysicalId (%d) error: %s", physID, err)
+			} else {
+				createDeviceFlag = true
+				klog.Infof("CreateDevice for SMA VirtioBlk with PhysicalId (%d)", physID)
+				bdf = fmt.Sprintf("0000:%02d:%02x.0", pciBridge, busCount)
+				break
+			}
+		}
+		if createDeviceFlag {
+			break
+		}
+	}
+
+	if !createDeviceFlag {
+		klog.Errorf("CreateDevice for SMA VirtioBlk failed with all PhysicalIds with kvmPciBridges as (%d)", i.kvmPciBridges)
+		return "", fmt.Errorf("could not CreateDevice for SMA VirtioBlk")
+	}
+
+	// the parent dir path of the block device for VirtioBlk should be, eg, in the form of "/sys/bus/pci/drivers/virtio-pci/0000:01:01.0/virtio2/block"
+	sysBusGlob := fmt.Sprintf("/sys/bus/pci/drivers/virtio-pci/%s/virtio*/block", bdf)
+	deviceParentDirPath, err := waitForDeviceReady(sysBusGlob, 20)
+	if err != nil {
+		klog.Errorf("could not find the deviceParentDirPath (%s): %s", sysBusGlob, err)
+		i.smainitiatorVirtioBlkCleanup()
+		return "", err
+	}
+
+	// Open the parent dir and read the dir for block device for VirtioBlk, eg, in the form of "vda", which is exactly the device name
+	deviceName, err := os.ReadDir(deviceParentDirPath)
+	if err != nil {
+		klog.Errorf("could not open the deviceParentDirPath (%s): %s", sysBusGlob, err)
+		i.smainitiatorVirtioBlkCleanup()
+		return "", err
+	}
+	if len(deviceName) != 1 {
+		klog.Errorf("the deviceParentDirPath (%s) has wrong content (%q)", sysBusGlob, deviceName)
+		i.smainitiatorVirtioBlkCleanup()
+		return "", err
+	}
+
+	// wait for the block device ready for VirtioBlk, eg, in the form of "/dev/vda"
+	deviceGlob := fmt.Sprintf("/dev/%s", deviceName[0].Name())
+	klog.Infof("deviceGlob %s", deviceGlob)
+	devicePath, err := waitForDeviceReady(deviceGlob, 20)
+	if err != nil {
+		klog.Errorf("could not find the device (%s): %s", deviceGlob, err)
+		i.smainitiatorVirtioBlkCleanup()
+		return "", err
+	}
+	i.devicePath = devicePath
+
+	return devicePath, nil
+}
+
+// For SMA VirtioBlk Disconnect(), only DeleteDevice is needed.
+
+func (i *smainitiatorVirtioBlk) Disconnect() error {
+	// DeleteDevice for VirtioBlk
+	deleteReq := &smarpc.DeleteDeviceRequest{
+		Handle: i.sma.deviceHandle,
+	}
+	if err := i.sma.DeleteDevice(i.sma.smaClient, deleteReq); err != nil {
+		return err
+	}
+	return waitForDeviceGone(i.devicePath, 20)
 }
