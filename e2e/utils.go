@@ -30,6 +30,8 @@ const (
 	pvcPath                  = "pvc.yaml"
 	testPodPath              = "testpod.yaml"
 	smaNvmfConfigPath        = "sma-nvmf.yaml"
+	opiNvmeConfigPath        = "opi-nvme.yaml"
+	opiVirtioBlkConfigPath   = "opi-virtioblk.yaml"
 	multiPvcsPath            = "multi-pvc.yaml"
 	testPodWithMultiPvcsPath = "testpod-multi-pvc.yaml"
 
@@ -105,6 +107,34 @@ func deleteSmaNvmfConfig() {
 	_, err := framework.RunKubectl(nameSpace, "delete", "-f", smaNvmfConfigPath)
 	if err != nil {
 		e2elog.Logf("failed to delete Sma Nvmf configmap %s", err)
+	}
+}
+
+func deployOpiNvmeConfig() {
+	_, err := framework.RunKubectl(nameSpace, "apply", "-f", opiNvmeConfigPath)
+	if err != nil {
+		e2elog.Logf("failed to create Opi Nvme configmap %s", err)
+	}
+}
+
+func deleteOpiNvmeConfig() {
+	_, err := framework.RunKubectl(nameSpace, "delete", "-f", opiNvmeConfigPath)
+	if err != nil {
+		e2elog.Logf("failed to delete Opi Nvme configmap %s", err)
+	}
+}
+
+func deployOpiVirtioBlkConfig() {
+	_, err := framework.RunKubectl(nameSpace, "apply", "-f", opiVirtioBlkConfigPath)
+	if err != nil {
+		e2elog.Logf("failed to create Opi VirtioBlk configmap %s", err)
+	}
+}
+
+func deleteOpiVirtioBlkConfig() {
+	_, err := framework.RunKubectl(nameSpace, "delete", "-f", opiVirtioBlkConfigPath)
+	if err != nil {
+		e2elog.Logf("failed to delete Opi VirtioBlk configmap %s", err)
 	}
 }
 

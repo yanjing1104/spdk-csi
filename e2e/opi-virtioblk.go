@@ -3,12 +3,13 @@ package e2e
 import (
 	"time"
 
+	"github.com/ShellCode33/VM-Detection/vmdetect"
 	ginkgo "github.com/onsi/ginkgo/v2"
 	"k8s.io/kubernetes/test/e2e/framework"
 )
 
 const (
-	smaNVMFConfigMapData = `{
+	opiVirtioBlkConfigMapData = `{
   "nodes": [
     {
       "name": "localhost",
@@ -20,22 +21,26 @@ const (
 }`
 )
 
-var _ = ginkgo.Describe("SPDKCSI-SMA-NVMF", func() {
+var _ = ginkgo.Describe("SPDKCSI-OPI-VirtioBlk", func() {
 	f := framework.NewDefaultFramework("spdkcsi")
 	ginkgo.BeforeEach(func() {
-		deployConfigs(smaNVMFConfigMapData)
-		deploySmaNvmfConfig()
+		deployConfigs(opiVirtioBlkConfigMapData)
+		deployOpiVirtioBlkConfig()
 		deployCsi()
 	})
 
 	ginkgo.AfterEach(func() {
 		deleteCsi()
-		deleteSmaNvmfConfig()
+		deleteOpiVirtioBlkConfig()
 		deleteConfigs()
 	})
 
-	ginkgo.Context("Test SPDK CSI SMA NVMF", func() {
-		ginkgo.It("Test SPDK CSI SMA NVMF", func() {
+	ginkgo.Context("Test SPDK CSI OPI VirtioBlk", func() {
+		ginkgo.It("Test SPDK CSI OPI VirtioBlk", func() {
+			if isVM, _ := vmdetect.IsRunningInVirtualMachine(); !isVM {
+				ginkgo.Skip("Skipping SPDKCSI-OPI-VirtioBlk test: Running inside a virtual machine")
+			}
+
 			ginkgo.By("checking controller statefulset is running", func() {
 				err := waitForControllerReady(f.ClientSet, 4*time.Minute)
 				if err != nil {
@@ -50,9 +55,9 @@ var _ = ginkgo.Describe("SPDKCSI-SMA-NVMF", func() {
 				}
 			})
 
-			ginkgo.By("log verification for SMA grpc connection", func() {
+			ginkgo.By("log verification for xPU grpc connection", func() {
 				expLogerrMsgMap := map[string]string{
-					"connected to xPU node 127.0.0.1:5114 with TargetType as xpu-sma-nvmftcp": "failed to catch the log about the connection to xPU node",
+					"connected to xPU node 127.0.0.1:50051 with TargetType as xpu-opi-virtioblk": "failed to catch the log about the connection to xPU node",
 				}
 				err := verifyNodeServerLog(expLogerrMsgMap)
 				if err != nil {
@@ -86,12 +91,12 @@ var _ = ginkgo.Describe("SPDKCSI-SMA-NVMF", func() {
 				}
 			})
 
-			ginkgo.By("log verification for SMA workflow", func() {
+			ginkgo.By("log verification for OPI workflow", func() {
 				expLogerrMsgMap := map[string]string{
-					"SMA.CreateDevice": "failed to catch the log about the SMA.CreateDevice phase",
-					"SMA.AttachVolume": "failed to catch the log about the SMA.AttachVolume phase",
-					"SMA.DetachVolume": "failed to catch the log about the SMA.DetachVolume phase",
-					"SMA.DeleteDevice": "failed to catch the log about the SMA.DeleteDevice phase",
+					"OPI.CreateNVMfRemoteController": "failed to catch the log about the OPI.CreateNVMfRemoteController phase",
+					"OPI.CreateVirtioBlk":            "failed to catch the log about the OPI.CreateVirtioBlk phase",
+					"OPI.DeleteVirtioBlk":            "failed to catch the log about the OPI.DeleteVirtioBlk phase",
+					"OPI.DeleteNVMfRemoteController": "failed to catch the log about the OPI.DeleteNVMfRemoteController phase",
 				}
 				err := verifyNodeServerLog(expLogerrMsgMap)
 				if err != nil {

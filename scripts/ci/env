@@ -5,6 +5,8 @@ CRITOOLS_VERSION=v1.25.0
 CRIDOCKERD_VERSION=0.2.5
 CNIPLUGIN_VERSION=v1.1.1
 SPDKIMAGE=spdkdev:latest
+# Wait for https://github.com/opiproject/opi-spdk-bridge/pull/335 get merged and change the tag
+OPIIMAGE=opiproject/opi-spdk-bridge:v0.1.1
 JSONRPC_IP=127.0.0.1
 JSONRPC_PORT=9009
 JSONRPC_USER=spdkcsiuser

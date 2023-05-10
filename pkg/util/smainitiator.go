@@ -31,6 +31,7 @@ import (
 	"github.com/spdk/sma-goapi/v1alpha1/nvmf"
 	"github.com/spdk/sma-goapi/v1alpha1/nvmf_tcp"
 	"github.com/spdk/sma-goapi/v1alpha1/virtio_blk"
+	"google.golang.org/grpc"
 	"k8s.io/klog"
 )
 
@@ -43,17 +44,17 @@ const (
 )
 
 var (
-	smaNvmeReDeviceSysFilePath = regexp.MustCompile(`nvme(\d+)n(\d+)|nvme(\d+)c(\d+)n(\d+)`)
-	smaNvmeReDeviceName        = regexp.MustCompile(`c(\d+)`)
+	NvmeReDeviceSysFileName = regexp.MustCompile(`nvme(\d+)n(\d+)|nvme(\d+)c(\d+)n(\d+)`)
+	NvmeReDeviceName        = regexp.MustCompile(`c(\d+)`)
 )
 
-func NewSpdkCsiSmaInitiator(volumeContext map[string]string, smaClient smarpc.StorageManagementAgentClient, smaTargetType string, kvmPciBridges int) (SpdkCsiInitiator, error) {
+func NewSpdkCsiSmaInitiator(volumeContext map[string]string, xpuConnClient *grpc.ClientConn, xpuTargetType string, kvmPciBridges int) (SpdkCsiInitiator, error) {
 	iSmaCommon := &smaCommon{
-		smaClient:     smaClient,
+		smaClient:     smarpc.NewStorageManagementAgentClient(xpuConnClient),
 		volumeContext: volumeContext,
 		timeout:       60 * time.Second,
 	}
-	switch smaTargetType {
+	switch xpuTargetType {
 	case "xpu-sma-nvmftcp":
 		return &smainitiatorNvmfTCP{sma: iSmaCommon}, nil
 	case "xpu-sma-virtioblk":
@@ -64,7 +65,7 @@ func NewSpdkCsiSmaInitiator(volumeContext map[string]string, smaClient smarpc.St
 	case "xpu-sma-nvme":
 		return &smainitiatorNvme{sma: iSmaCommon}, nil
 	default:
-		return nil, fmt.Errorf("unknown SMA targetType: %s", smaTargetType)
+		return nil, fmt.Errorf("unknown SMA targetType: %s", xpuTargetType)
 	}
 }
 
@@ -328,7 +329,7 @@ func (i *smainitiatorNvmfTCP) Disconnect() error {
 	return nil
 }
 
-func (i *smainitiatorVirtioBlk) getVirtioBlkDevice(bdf string) (string, error) {
+func GetVirtioBlkDevice(bdf string) (string, error) {
 	// the parent dir path of the block device for VirtioBlk should be, eg, in the form of "/sys/bus/pci/drivers/virtio-pci/0000:01:01.0/virtio2/block"
 	sysBusGlob := fmt.Sprintf("/sys/bus/pci/drivers/virtio-pci/%s/virtio*/block", bdf)
 	deviceParentDirPath, err := waitForDeviceReady(sysBusGlob)
@@ -416,7 +417,7 @@ func (i *smainitiatorVirtioBlk) Connect() (string, error) {
 		return "", fmt.Errorf("could not CreateDevice for SMA VirtioBlk")
 	}
 
-	devicePath, err := i.getVirtioBlkDevice(bdf)
+	devicePath, err := GetVirtioBlkDevice(bdf)
 	if err != nil {
 		i.smainitiatorVirtioBlkCleanup()
 		return "", err
@@ -451,9 +452,9 @@ func (i *smainitiatorNvme) getNvmeDeviceName(uuidFilePath string) (string, error
 
 	if strings.TrimSpace(string(uuidContent)) == i.sma.volumeContext["model"] {
 		// Obtain the part nvme*c*n* or nvme*n* from the file path, eg, nvme0c0n1
-		deviceSysFileName := smaNvmeReDeviceSysFilePath.FindString(uuidFilePath)
+		deviceSysFileName := NvmeReDeviceSysFileName.FindString(uuidFilePath)
 		// Remove c* from (nvme*c*n*), eg, c0
-		deviceName := smaNvmeReDeviceName.ReplaceAllString(deviceSysFileName, "")
+		deviceName := NvmeReDeviceName.ReplaceAllString(deviceSysFileName, "")
 		return deviceName, nil
 	}
 

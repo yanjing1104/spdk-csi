@@ -3,11 +3,14 @@ module github.com/spdk/spdk-csi
 go 1.19
 
 require (
+	github.com/ShellCode33/VM-Detection v0.0.0-20200304230940-4fd05cb2aa47
 	github.com/container-storage-interface/spec v1.6.0
 	github.com/google/uuid v1.1.2
 	github.com/kubernetes-csi/csi-lib-utils v0.7.0
 	github.com/onsi/gomega v1.19.0
+	github.com/opiproject/opi-api v0.0.0-20230427144911-9638639fdf99
 	github.com/spdk/sma-goapi v0.0.0
+	github.com/stretchr/testify v1.8.3
 	google.golang.org/grpc v1.53.0
 	google.golang.org/protobuf v1.30.0
 	k8s.io/apimachinery v0.25.0
@@ -94,7 +97,15 @@ require (
 	sigs.k8s.io/yaml v1.2.0 // indirect
 )
 
-require k8s.io/api v0.25.0 // indirect
+require (
+	github.com/go-ole/go-ole v1.2.6 // indirect
+	github.com/klauspost/cpuid v1.3.1 // indirect
+	github.com/pmezard/go-difflib v1.0.0 // indirect
+	github.com/shirou/gopsutil v3.21.11+incompatible // indirect
+	github.com/stretchr/objx v0.5.0 // indirect
+	github.com/yusufpapurcu/wmi v1.2.3 // indirect
+	k8s.io/api v0.25.0 // indirect
+)
 
 replace (
 	github.com/spdk/sma-goapi => github.com/askervin/sma-goapi v0.0.0-20230321143408-d7d13ac8a0d7

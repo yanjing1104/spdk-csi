@@ -6,8 +6,10 @@
 # FIXME (JingYan): too many "echo"s, try to define a logger function with different logging levels, including
 # "info", "warning" and "error", etc. and replace all the "echo" with the logger function
 
-SPDK_CONTAINER="spdkdev-e2e"
+SPDK_STORAGE_CONTAINER="spdkdev-storage"
 SPDK_SMA_CONTAINER="spdkdev-sma"
+SPDK_OPI_CONTAINER="spdkdev-opi"
+OPI_SPDK_BRIDGE_CONTAINER="opi-spdk-bridge"
 
 function export_proxy() {
 	local http_proxies
@@ -77,7 +79,7 @@ function check_os() {
 	fi
 }
 
-# allocate 2048*2M hugepages for prepare_spdk() and prepare_sma()
+# allocate 2048*2M hugepages for prepare_spdk_storage() and prepare_spdk_sma()/prepare_spdk_opi()
 function allocate_hugepages() {
 	local HUGEPAGES_MIN=2048
 	local NR_HUGEPAGES=/proc/sys/vm/nr_hugepages
@@ -296,29 +298,40 @@ function prepare_k8s_cluster() {
 }
 
 # FIXME (JingYan): after starting the container, instead of waiting for a fixed number of seconds before executing commands
-# in the container in the prepare_spdk() and prepare_sma() functions, we could try to do docker exec here and call spdk's rpc.py
+# in the container in the prepare_spdk_storage() and prepare_spdk_sma() functions, we could try to do docker exec here and call spdk's rpc.py
 # to try communicating with target. See https://github.com/spdk/spdk/blob/master/test/common/autotest_common.sh#L785
 
-function prepare_spdk() {
+function prepare_spdk_storage() {
 	echo "======== start spdk target for storage node ========"
 	grep Huge /proc/meminfo
 	# start spdk target for storage node
-	sudo docker run -id --name "${SPDK_CONTAINER}" --privileged --net host -v /dev/hugepages:/dev/hugepages -v /dev/shm:/dev/shm "${SPDKIMAGE}" /root/spdk/build/bin/spdk_tgt
+	sudo docker run -id --name "${SPDK_STORAGE_CONTAINER}" --privileged --net host -v /dev/hugepages:/dev/hugepages -v /dev/shm:/dev/shm "${SPDKIMAGE}" /root/spdk/build/bin/spdk_tgt
 	sleep 20s
 	# wait for spdk target ready
-	sudo docker exec -i "${SPDK_CONTAINER}" timeout 5s /root/spdk/scripts/rpc.py framework_wait_init
+	sudo docker exec -i "${SPDK_STORAGE_CONTAINER}" timeout 5s /root/spdk/scripts/rpc.py framework_wait_init
 	# create 1G malloc bdev
-	sudo docker exec -i "${SPDK_CONTAINER}" /root/spdk/scripts/rpc.py bdev_malloc_create -b Malloc0 1024 4096
+	sudo docker exec -i "${SPDK_STORAGE_CONTAINER}" /root/spdk/scripts/rpc.py bdev_malloc_create -b Malloc0 1024 4096
 	# create lvstore
-	sudo docker exec -i "${SPDK_CONTAINER}" /root/spdk/scripts/rpc.py bdev_lvol_create_lvstore Malloc0 lvs0
+	sudo docker exec -i "${SPDK_STORAGE_CONTAINER}" /root/spdk/scripts/rpc.py bdev_lvol_create_lvstore Malloc0 lvs0
 	# start jsonrpc http proxy
-	sudo docker exec -id "${SPDK_CONTAINER}" /root/spdk/scripts/rpc_http_proxy.py "${JSONRPC_IP}" "${JSONRPC_PORT}" "${JSONRPC_USER}" "${JSONRPC_PASS}"
+	sudo docker exec -id "${SPDK_STORAGE_CONTAINER}" /root/spdk/scripts/rpc_http_proxy.py "${JSONRPC_IP}" "${JSONRPC_PORT}" "${JSONRPC_USER}" "${JSONRPC_PASS}"
 	sleep 10s
 }
 
-function prepare_sma() {
-	echo "======== start spdk target for IPU node ========"
-	# start spdk target for IPU node
+function prepare_spdk_opi() {
+	echo "======== start spdk target ========"
+    sudo docker run -id --name "${SPDK_OPI_CONTAINER}" --privileged --net host -v /dev/hugepages:/dev/hugepages -v /dev/shm:/dev/shm -v /var/tmp:/var/tmp -v /lib/modules:/lib/modules "${SPDKIMAGE}" bash -c "/root/spdk/scripts/setup.sh && /root/spdk/build/bin/spdk_tgt -S /var/tmp -m 0x3 -L all"
+	sleep 20s
+    sudo docker exec -i "${SPDK_OPI_CONTAINER}" /root/spdk/scripts/rpc.py nvmf_create_transport -t VFIOUSER
+    sleep 10s
+	echo "======== start opi-spdk-bridge ========"
+    docker run -id --name "${OPI_SPDK_BRIDGE_CONTAINER}" --net host -v /var/tmp/:/var/tmp/ "${OPIIMAGE}" /opi-spdk-bridge -port=50051 -kvm=true -qmp_addr=127.0.0.1:9090 -spdk_addr=/var/tmp/spdk.sock -ctrlr_dir=/var/tmp -tcp_trid=127.0.0.1:4420 -buses=pci.spdk.0:pci.spdk.1
+    sleep 10s
+}
+
+function prepare_spdk_sma() {
+	echo "======== start spdk target for xPU node ========"
+	# start spdk target for xPU node
 	sudo docker run -id --name "${SPDK_SMA_CONTAINER}" --privileged --net host -v /dev/hugepages:/dev/hugepages -v /dev/shm:/dev/shm -v /var/tmp:/var/tmp -v /lib/modules:/lib/modules "${SPDKIMAGE}"
 	sudo docker exec -i "${SPDK_SMA_CONTAINER}" sh -c "HUGEMEM=2048 /root/spdk/scripts/setup.sh; /root/spdk/build/bin/spdk_tgt -S /var/tmp -m 0x3 &"
 	sleep 20s
